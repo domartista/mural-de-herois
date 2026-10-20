@@ -666,8 +666,12 @@ function placeholder(name,kind){
   const ini=kind==='rpg'?'⬡':kind==='org'?'⚜':initials(name);
   return 'data:image/svg+xml;utf8,'+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="hsl(${h},70%,52%)"/><stop offset="1" stop-color="hsl(${(h+50)%360},60%,22%)"/></linearGradient><pattern id="d" width="6" height="6" patternUnits="userSpaceOnUse"><circle cx="3" cy="3" r="1" fill="rgba(255,255,255,.12)"/></pattern></defs><rect width="100" height="100" fill="url(#g)"/><rect width="100" height="100" fill="url(#d)"/><text x="50" y="63" text-anchor="middle" font-family="Impact,sans-serif" font-size="36" fill="#fff" stroke="rgba(0,0,0,.35)" stroke-width="1.5">${esc(ini)}</text></svg>`);
 }
-const avatarOf=c=>c.avatar||placeholder(c.name);
-const imgOf=(e,k)=>e.image||placeholder(e.name,k);
+// só aceita links http(s), blob: e data:image — e neutraliza aspas/sinais que quebrariam o atributo HTML
+const safeUrl=u=>{u=String(u||'').trim();return /^(https?:|blob:|data:image\/)/i.test(u)?u.replace(/["'<>`\s]/g,c=>'%'+c.charCodeAt(0).toString(16).toUpperCase().padStart(2,'0')):'';};
+const okId=id=>typeof id==='string'&&/^[\w-]{1,80}$/.test(id);
+const okHex=v=>/^#[0-9a-f]{3,8}$/i.test(String(v||''));
+const avatarOf=c=>safeUrl(c.avatar)||placeholder(c.name);
+const imgOf=(e,k)=>safeUrl(e.image)||placeholder(e.name,k);
 function statusOf(c){return STATUS.find(s=>s[0]===c.status)||STATUS[3];}
 function statusLabel(c){const s=statusOf(c);return s[0]==='outros'?(c.statusOther||'Outros'):s[1];}
 function statusBadge(c){const s=statusOf(c);return `<span class="st st-${s[0]}"><img src="${ASSETS.ui[s[2]]}" alt="">${esc(statusLabel(c))}</span>`;}
@@ -675,7 +679,7 @@ function visOf(c){return VIS.find(v=>v[0]===c.visibility)||VIS[0];}
 function visBadge(c,always){const v=visOf(c);if(v[0]==='publico'&&!always)return'';return `<span class="vb vb-${v[0]}" title="${esc(v[3])}">${v[2]} ${v[1]}</span>`;}
 function palOf(c){if(c.palette==='custom'&&c.paletteCustom)return c.paletteCustom;return PALETTES[c.palette]||PALETTES.entardecer;}
 function palStyle(c){const p=palOf(c);return `--c1:${p.c1};--c2:${p.c2};--c3:${p.c3};--cbg:${p.bg}`;}
-// visibilidade (local: prévia de player; no Cloudflare: autor/moderador)
+// visibilidade: quem filtra é o Supabase (autor/moderador)
 const visibleChar=c=>!!c; // o servidor só envia o que você pode ver
 const VC=()=>S.chars;
 function multiOf(c){const n=norm(c.name);return n?VC().filter(x=>x.id!==c.id&&norm(x.name)===n):[];}
@@ -695,7 +699,7 @@ const canEditEnt=e=>!!e&&(isMod()||e.createdBy===ME.email);
 function uname(email){if(!email)return'';const u=USERS.find(x=>x.email===email);return u?(u.name||email.split('@')[0]):email.split('@')[0];}
 
 // ── ícones ──
-function iconLib(){return[...ASSETS.icons,...S.customIcons.map(u=>({k:'u:'+u.id,label:u.name,g:'Seus ícones',src:u.src}))];}
+function iconLib(){return[...ASSETS.icons,...S.customIcons.map(u=>({k:'u:'+u.id,label:u.name,g:'Seus ícones',src:safeUrl(u.src)}))];}
 function iconOf(k){return iconLib().find(i=>i.k===k);}
 const validIcons=arr=>(arr||[]).filter(iconOf);
 
@@ -732,11 +736,7 @@ function plim(){
 }
 
 // ── API (Supabase) ──
-const CFG=Object.assign({},window.MURAL_CONFIG||{});
-// aceita a URL colada com sobras (/rest/v1, /auth/v1, barra final, espaços) e chave com espaços/aspas
-CFG.SUPABASE_URL=String(CFG.SUPABASE_URL||'').trim().replace(/^['"]|['"]$/g,'').replace(/\/(rest|auth|storage)\/v1.*$/i,'').replace(/\/+$/,'');
-if(CFG.SUPABASE_URL&&!/^https?:\/\//i.test(CFG.SUPABASE_URL))CFG.SUPABASE_URL='https://'+CFG.SUPABASE_URL;
-CFG.SUPABASE_ANON_KEY=String(CFG.SUPABASE_ANON_KEY||'').trim().replace(/^['"]|['"]$/g,'').replace(/\s+/g,'');
+const CFG=window.MURAL_CONFIG||{};
 let SB=null;
 const BUCKET='mural';
 function mapErr(err){
@@ -789,7 +789,7 @@ async function uploadBlob(blob,name){
   if(error)throw Object.assign(new Error(/size|exceed/i.test(error.message)?'Arquivo grande demais (limite de 50 MB).':'Falha ao enviar arquivo: '+error.message),{status:400});
   return SB.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
 }
-// troca qualquer imagem/arquivo embutido (data:) por um arquivo no R2
+// troca qualquer imagem/arquivo embutido (data:) por um arquivo no Supabase Storage
 async function uploadMedia(obj,skip=[]){
   const jobs=[];
   const walk=(o,d)=>{if(!o||typeof o!=='object'||d>7)return;for(const k of Object.keys(o)){if(d===0&&skip.includes(k))continue;const v=o[k];if(typeof v==='string'&&v.startsWith('data:')&&v.length>300)jobs.push([o,k]);else if(v&&typeof v==='object')walk(v,d+1);}};
@@ -802,7 +802,7 @@ function persist(){try{localStorage.setItem('mural-settings',JSON.stringify(S.se
 function migrate(s){
   s=Object.assign(blankState(),s||{});
   s.settings=Object.assign(blankState().settings,s.settings||{});
-  ['rpgs','orgs','chars','customIcons'].forEach(k=>{if(!Array.isArray(s[k]))s[k]=[];});
+  ['rpgs','orgs','chars','customIcons'].forEach(k=>{if(!Array.isArray(s[k]))s[k]=[];s[k]=s[k].filter(e=>e&&okId(e.id));});
   s.rpgs.forEach(r=>{if(!Array.isArray(r.tags))r.tags=[];if(!Array.isArray(r.members))r.members=[];r.closed=!!r.closed;});
   s.orgs.forEach(o=>{if(!Array.isArray(o.rpgIds))o.rpgIds=[];if(!Array.isArray(o.tags))o.tags=[];});
   s.chars.forEach(c=>{
@@ -811,8 +811,11 @@ function migrate(s){
     if(!c.status)c.status='desconhecido';
     if(!VIS.some(v=>v[0]===c.visibility))c.visibility='publico';
     if(!c.palette)c.palette=Object.keys(PALETTES)[hash(c.id)%7];
-    if(!c.paletteCustom)c.paletteCustom={...PALETTES.entardecer};
+    if(!c.paletteCustom||!['c1','c2','c3','bg'].every(k=>okHex(c.paletteCustom[k])))c.paletteCustom={...PALETTES.entardecer};
     if(!c.familyTags||typeof c.familyTags!=='object')c.familyTags={};
+    // ids vão parar em onclick="..." — descarta qualquer um fora do formato esperado
+    c.relations=c.relations.filter(r=>r&&okId(r.id)&&okId(r.target));
+    ['timeline','comments','sheets'].forEach(k=>{c[k]=c[k].filter(e=>e&&okId(e.id));});
     c.timeline.forEach(e=>{if(!Array.isArray(e.images))e.images=[];});
   });
   return s;
@@ -1089,7 +1092,7 @@ function closeAllModals(){$$('.mbd').forEach(m=>closeModal(m));}
 
 // ── VISUALIZAÇÃO RÁPIDA ──
 let QV_IMGS=[];
-function relatedImgs(c){return[...c.gallery.map(g=>g.data),...c.timeline.flatMap(e=>e.images.map(i=>i.data))];}
+function relatedImgs(c){return[...c.gallery.map(g=>safeUrl(g.data)),...c.timeline.flatMap(e=>e.images.map(i=>safeUrl(i.data)))].filter(Boolean);}
 function baseRows(c){
   const rows=[
     ['Espécie / Raça',esc(c.species.join(', '))],['Classe / Profissão',esc(c.classes.join(', '))],
@@ -1180,7 +1183,7 @@ function vChar(){
   </section>`;
 }
 function setTab(t){view.tab=t;render();}
-function zoomAvatar(id){const c=getChar(id);LB={imgs:[c.avatarOrig||avatarOf(c)],i:0};showLB();}
+function zoomAvatar(id){const c=getChar(id);LB={imgs:[safeUrl(c.avatarOrig)||avatarOf(c)],i:0};showLB();}
 async function setVis(id,v){const c=getChar(id);c.visibility=v;c.updated=Date.now();await commit(`Visibilidade: ${visOf(c)[1]}`,{chars:[id]});render();}
 
 // ── CONEXÕES ──
@@ -1263,11 +1266,11 @@ function timelinePane(c){
 }
 function tlItem(c,e,i,E){
   return `<div class="tl-i"><div class="tl-when">${hasAge(e.age)?`<b>${esc(e.age)}</b><span>anos</span>`:''}${e.when?`<small>${esc(e.when)}</small>`:''}</div><div class="tl-dot"></div>
-    <div class="tl-card"><div class="tl-head"><h4>${esc(e.title)}</h4><div class="tl-acts">${!E?'':i>0?`<button title="Subir" onclick="moveEvent('${c.id}',${i},-1)">↑</button>`:''}${i<c.timeline.length-1?`<button title="Descer" onclick="moveEvent('${c.id}',${i},1)">↓</button>`:''}${E?`<button title="Editar" onclick="editEvent('${c.id}','${e.id}')">✎</button><button title="Apagar" onclick="delEvent('${c.id}','${e.id}')">🗑</button>`:''}</div></div>
+    <div class="tl-card"><div class="tl-head"><h4>${esc(e.title)}</h4><div class="tl-acts">${E&&i>0?`<button title="Subir" onclick="moveEvent('${c.id}',${i},-1)">↑</button>`:''}${E&&i<c.timeline.length-1?`<button title="Descer" onclick="moveEvent('${c.id}',${i},1)">↓</button>`:''}${E?`<button title="Editar" onclick="editEvent('${c.id}','${e.id}')">✎</button><button title="Apagar" onclick="delEvent('${c.id}','${e.id}')">🗑</button>`:''}</div></div>
     ${e.text?`<div class="lore">${esc(e.text)}</div>`:''}
-    ${e.images.length?`<div class="gal sm">${e.images.map((im,k)=>`<div class="gi"><img src="${im.data}" alt="" loading="lazy" onclick="openEvImgs('${c.id}','${e.id}',${k})"></div>`).join('')}</div>`:''}</div></div>`;
+    ${e.images.length?`<div class="gal sm">${e.images.map((im,k)=>`<div class="gi"><img src="${safeUrl(im.data)}" alt="" loading="lazy" onclick="openEvImgs('${c.id}','${e.id}',${k})"></div>`).join('')}</div>`:''}</div></div>`;
 }
-function openEvImgs(cid,eid,k){const e=getChar(cid).timeline.find(x=>x.id===eid);LB={imgs:e.images.map(i=>i.data),i:k};showLB();}
+function openEvImgs(cid,eid,k){const e=getChar(cid).timeline.find(x=>x.id===eid);LB={imgs:e.images.map(i=>safeUrl(i.data)),i:k};showLB();}
 function editEvent(cid,eid){
   const c=getChar(cid);const src=eid?c.timeline.find(e=>e.id===eid):null;
   ED=src?clone(src):{id:uid('ev'),age:'',when:'',title:'',text:'',images:[]};ED.__cid=cid;ED.__new=!src;
@@ -1281,7 +1284,7 @@ function editEvent(cid,eid){
     _cancel=()=>closeModal();
   setTimeout(()=>$('#ev-title')?.focus(),60);
 }
-function evImgsHTML(){return ED.images.length?`<div class="gal sm">${ED.images.map((im,i)=>`<div class="gi"><img src="${im.data}" alt=""><button class="gx" onclick="ED.images.splice(${i},1);$('#ev-imgs').innerHTML=evImgsHTML()">✕</button></div>`).join('')}</div>`:'';}
+function evImgsHTML(){return ED.images.length?`<div class="gal sm">${ED.images.map((im,i)=>`<div class="gi"><img src="${safeUrl(im.data)}" alt=""><button class="gx" onclick="ED.images.splice(${i},1);$('#ev-imgs').innerHTML=evImgsHTML()">✕</button></div>`).join('')}</div>`:'';}
 async function evAddImgs(files){if(!files)return;for(const f of files){if(f.type.startsWith('image/'))ED.images.push({id:uid('ei'),name:f.name,data:await fileToImage(f,1600)});}$('#ev-imgs').innerHTML=evImgsHTML();}
 async function saveEvent(){
   if(!ED.title.trim()){toast('⚠ Dê um título ao acontecimento');return $('#ev-title').focus();}
@@ -1341,7 +1344,7 @@ function entityHero(kind,e,acts){
     ${e.desc?`<p class="lore" style="margin-top:14px">${esc(e.desc)}</p>`:''}
     <div class="row" style="margin-top:18px">${acts}</div></div></div>`;
 }
-function zoomEntity(kind,id){const e=kind==='rpg'?getRpg(id):getOrg(id);LB={imgs:[e.imageOrig||imgOf(e,kind)],i:0};showLB();}
+function zoomEntity(kind,id){const e=kind==='rpg'?getRpg(id):getOrg(id);LB={imgs:[safeUrl(e.imageOrig)||imgOf(e,kind)],i:0};showLB();}
 function vRpg(){
   const r=getRpg(view.id);if(!r)return notFound();
   const chars=VC().filter(c=>c.rpgId===r.id).sort(byName);const orgs=S.orgs.filter(o=>o.rpgIds.includes(r.id));
@@ -1383,7 +1386,7 @@ function togArr(arr,id,cb){const i=arr.indexOf(id);if(cb.checked&&i<0)arr.push(i
 
 function asideHTML(f){
   const has=!!D[f];
-  return `<div class="av-square"><img id="ed-av-img" src="${D[f]||placeholder(D.name,D.__kind)}" alt=""></div>
+  return `<div class="av-square"><img id="ed-av-img" src="${safeUrl(D[f])||placeholder(D.name,D.__kind)}" alt=""></div>
     <button class="btn solid full" onclick="pickImg('${f}')">⬆ ${has?'Trocar imagem':(f==='avatar'?'Enviar aparência':'Enviar imagem')}</button>
     ${has?`<button class="btn full" onclick="recrop('${f}')">✂ Reajustar recorte</button><button class="btn red full" onclick="rmImg('${f}')">✕ Remover imagem</button>`:''}
     <p class="hint">O recorte é sempre um <b>ícone quadrado</b> — arraste e aproxime para deixar o rosto em foco.</p>`;
@@ -1583,7 +1586,7 @@ function entityEditorHTML(){
         ${chipField('tags','Temas / Tags','Ex: fantasia, horror, steampunk... (Enter)',allTags())}
         ${isR?'':`<div class="fg"><label>RPGs interligados (um ou mais)</label><div class="pick">${S.rpgs.slice().sort(byName).map(r=>`<label class="pk ${D.rpgIds.includes(r.id)?'on':''}"><input type="checkbox" ${D.rpgIds.includes(r.id)?'checked':''} onchange="togArr(D.rpgIds,'${r.id}',this)"><img src="${imgOf(r,'rpg')}" alt="">${esc(r.name)}</label>`).join('')||'<span class="hint">Nenhum RPG cadastrado ainda.</span>'}</div></div>`}
         ${isR?`<div class="fg"><label class="chk" style="margin:0 0 8px"><input type="checkbox" ${D.closed?'checked':''} onchange="D.closed=this.checked;$('#rpg-mem').classList.toggle('hidden',!this.checked)"> 🔒 Mesa fechada — só participantes (e moderadores) veem este RPG e seus personagens</label>
-          <div id="rpg-mem" class="${D.closed?'':'hidden'}"><div class="pk-sub" style="margin-bottom:6px">Participantes</div><div class="pick">${USERS.filter(u=>u.role!=='blocked').map(u=>`<label class="pk ${(D.members||[]).includes(u.email)?'on':''}"><input type="checkbox" ${(D.members||[]).includes(u.email)?'checked':''} onchange="togArr(D.members,'${esc(u.email)}',this)"><span class="cm-av" style="width:30px;height:30px;font-size:13px;border-width:2px;background:${personColor(u.name)}">${esc(initials(u.name))}</span>${esc(u.name)}</label>`).join('')}</div><p class="hint" style="margin-top:6px">Quem criou o RPG sempre tem acesso. Players aparecem aqui depois do primeiro acesso ao Mural.</p></div></div>`:''}
+          <div id="rpg-mem" class="${D.closed?'':'hidden'}"><div class="pk-sub" style="margin-bottom:6px">Participantes</div><div class="pick">${USERS.filter(u=>u.role!=='blocked').map(u=>`<label class="pk ${(D.members||[]).includes(u.email)?'on':''}"><input type="checkbox" ${(D.members||[]).includes(u.email)?'checked':''} data-e="${esc(u.email)}" onchange="togArr(D.members,this.dataset.e,this)"><span class="cm-av" style="width:30px;height:30px;font-size:13px;border-width:2px;background:${personColor(u.name)}">${esc(initials(u.name))}</span>${esc(u.name)}</label>`).join('')}</div><p class="hint" style="margin-top:6px">Quem criou o RPG sempre tem acesso. Players aparecem aqui depois do primeiro acesso ao Mural.</p></div></div>`:''}
         <div class="fg"><label>Descrição</label><textarea class="fi" rows="7" oninput="D.desc=this.value" placeholder="${isR?'Premissa, sistema, mestre, dias de sessão...':'Objetivos, hierarquia, símbolos...'}">${esc(D.desc)}</textarea></div>
       </div></div>
     <div class="ed-foot"><span class="hint"></span><button class="btn" onclick="closeEditor()">Cancelar</button><button class="btn solid" onclick="saveEntity()">💾 Salvar</button></div></div>`;
@@ -1650,9 +1653,9 @@ function cropModal(src,crop,opts={}){
 // ── GALERIA + ARQUIVOS ──
 const tgt=(mode,id)=>mode==='draft'?D:getChar(id);
 function galleryHTML(mode,o,small,editable=true){
-  if(!editable)return o.gallery.length?`<div class="gal ${small?'sm':''}">${o.gallery.map((g,i)=>`<div class="gi"><img src="${g.data}" alt="" loading="lazy" onclick="openGallery('${mode}','${o.id}',${i})"></div>`).join('')}</div>`:'<p class="hint">Nenhuma imagem na galeria.</p>';
+  if(!editable)return o.gallery.length?`<div class="gal ${small?'sm':''}">${o.gallery.map((g,i)=>`<div class="gi"><img src="${safeUrl(g.data)}" alt="" loading="lazy" onclick="openGallery('${mode}','${o.id}',${i})"></div>`).join('')}</div>`:'<p class="hint">Nenhuma imagem na galeria.</p>';
   return `<div class="drop" data-mode="${mode}" data-kind="gallery" data-id="${o.id}" ondragover="event.preventDefault();this.classList.add('over')" ondragleave="this.classList.remove('over')" ondrop="dzDrop(event)" onclick="dzPick(this)"><b>⬆ Adicionar imagens</b><span>Clique ou arraste — quantas quiser, sem recorte</span></div>
-    ${o.gallery.length?`<div class="gal ${small?'sm':''}">${o.gallery.map((g,i)=>`<div class="gi"><img src="${g.data}" alt="" loading="lazy" onclick="openGallery('${mode}','${o.id}',${i})"><button class="gx" title="Remover" onclick="rmMedia('gallery','${mode}','${o.id}',${i})">✕</button></div>`).join('')}</div>`:''}`;
+    ${o.gallery.length?`<div class="gal ${small?'sm':''}">${o.gallery.map((g,i)=>`<div class="gi"><img src="${safeUrl(g.data)}" alt="" loading="lazy" onclick="openGallery('${mode}','${o.id}',${i})"><button class="gx" title="Remover" onclick="rmMedia('gallery','${mode}','${o.id}',${i})">✕</button></div>`).join('')}</div>`:''}`;
 }
 function filesHTML(mode,o,editable=true){
   if(!editable)return o.files.length?`<div class="flist">${o.files.map((f,i)=>`<div class="frow"><span class="fic">${fileIcon(f)}</span><div class="fn"><b title="${esc(f.name)}">${esc(f.name)}</b><small>${fmtSize(f.size||0)}${f.added?' · '+fmtDT(f.added):''}</small></div><button class="btn sm" onclick="openFile('${mode}','${o.id}',${i})">👁 Abrir</button><button class="btn sm" onclick="dlFile('${mode}','${o.id}',${i})">⬇</button></div>`).join('')}</div>`:'<p class="hint">Nenhum arquivo anexado.</p>';
@@ -1681,7 +1684,7 @@ async function afterMedia(mode,id,msg){
 }
 function openFile(mode,id,i){
   const f=tgt(mode,id).files[i];
-  if(!f.data.startsWith('data:')){const w=window.open(f.data,'_blank');if(!w)dlFile(mode,id,i);return;}
+  if(!f.data.startsWith('data:')){if(!/^https?:/i.test(f.data))return toast('⚠ Link de arquivo inválido');const w=window.open(f.data,'_blank','noopener');if(!w)dlFile(mode,id,i);return;}
   const blob=dataURLtoBlob(f.data);
   const url=URL.createObjectURL(blob);
   const viewable=/^(application\/pdf|image\/|text\/|audio\/|video\/)|json/.test(blob.type);
@@ -1690,7 +1693,7 @@ function openFile(mode,id,i){
   setTimeout(()=>URL.revokeObjectURL(url),120000);
 }
 async function dlFile(mode,id,i){const f=tgt(mode,id).files[i];if(f.data.startsWith('data:'))return download(f.name,dataURLtoBlob(f.data));try{const r=await fetch(f.data,{credentials:'same-origin'});download(f.name,await r.blob());}catch(e){toast('⚠ Não consegui baixar o arquivo');}}
-function openGallery(mode,id,i){const o=tgt(mode,id);LB={imgs:o.gallery.map(g=>g.data),i};showLB();}
+function openGallery(mode,id,i){const o=tgt(mode,id);LB={imgs:o.gallery.map(g=>safeUrl(g.data)),i};showLB();}
 function showLB(){const m=openModal(`<div class="lb"><img id="lb-img" alt=""><button class="lb-n p" onclick="lbStep(-1)">‹</button><button class="lb-n n" onclick="lbStep(1)">›</button><div class="lb-c" id="lb-c"></div><button class="icl lb-x" onclick="closeModal()">✕</button></div>`,{kind:'lb'});m.classList.add('lbm');lbDraw();}
 function lbDraw(){$('#lb-img').src=LB.imgs[LB.i];$('#lb-c').textContent=LB.imgs.length>1?(LB.i+1)+' / '+LB.imgs.length:'';$$('.lb-n').forEach(b=>b.style.display=LB.imgs.length>1?'':'none');}
 function lbStep(d){LB.i=(LB.i+d+LB.imgs.length)%LB.imgs.length;lbDraw();}
@@ -1737,7 +1740,7 @@ function sheetTemplate(c){
   items.push(b('portrait',{title:c.name,subtitle:c.surnames||'',imgUrl:avatarOf(c),shape:'p-rect',imgHeight:220,span:'sp4'}));
   const tags=[...c.species,...c.classes,statusLabel(c),...c.nicknames.map(n=>'“'+n+'”')].filter(Boolean);
   items.push(b('tags',{title:'Identidade',subtitle:getRpg(c.rpgId)?.name||'',tags,tagsFS:'12px',span:'sp8'}));
-  items.push(b('lore',{title:'Lore',subtitle:'História completa',text:esc(c.desc||'Escreva aqui a lore completa do personagem.').replace(/\n/g,'<br>'),fontSize:'fsn',span:'sp12'}));
+  items.push(b('lore',{title:'Lore',subtitle:'História completa',text:(c.desc||'Escreva aqui a lore completa do personagem.').replace(/\n/g,'<br>'),fontSize:'fsn',span:'sp12'}));
   items.push(b('resource',{title:'Pontos de Vida',subtitle:'HP',val:20,max:20,barColor:'c-em',span:'sp6'}));
   items.push(b('resource',{title:'Mana',subtitle:'MP',val:10,max:10,barColor:'c-ind',span:'sp6'}));
   return{items,adornos:[],floatTexts:[],fontMode:'default'};
@@ -1787,7 +1790,7 @@ window.addEventListener('beforeunload',e=>{if(Object.keys(NF.drafts).length){e.p
 // ══════════════════════════════════════════
 //  EXPORTAR / IMPORTAR (JSON + XML)
 // ══════════════════════════════════════════
-function exportJSON(silent){const o={exportedAt:new Date().toISOString(),by:ME.email,rpgs:S.rpgs,orgs:S.orgs,chars:S.chars.map(c=>{const x={...c};delete x._base;return x;}),customIcons:S.customIcons,users:USERS};download(`mural-de-herois_${stamp()}.json`,JSON.stringify(o),'application/json');if(!silent)toast('⬇ JSON baixado — as imagens ficam no Cloudflare (o arquivo traz os links)');}
+function exportJSON(silent){const o={exportedAt:new Date().toISOString(),by:ME.email,rpgs:S.rpgs,orgs:S.orgs,chars:S.chars.map(c=>{const x={...c};delete x._base;return x;}),customIcons:S.customIcons,users:USERS};download(`mural-de-herois_${stamp()}.json`,JSON.stringify(o),'application/json');if(!silent)toast('⬇ JSON baixado — as imagens ficam no Supabase (o arquivo traz os links)');}
 const xmlEsc=s=>String(s).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g,'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function toXML(v,tag,ind){
   const okTag=/^[A-Za-z_][\w.-]*$/.test(tag)&&!/^xml/i.test(tag);
@@ -1845,7 +1848,7 @@ function usersModal(){
   const owner=ME.role==='owner';
   const opts=u=>owner?['mod','player','blocked','remove']:(isMod()&&['player','blocked'].includes(u.role))?['player','blocked','remove']:null;
   const LBL={...ROLE,remove:'✕ Remover convite'};
-  const rows=USERS.map(u=>{const o=u.email!==ME.email&&u.role!=='owner'?opts(u):null;return `<div class="trow"><span class="cm-av" style="background:${personColor(u.name)}">${esc(initials(u.name))}</span><div class="fn"><b>${esc(u.name)}${u.email===ME.email?' (você)':''}</b><small>${esc(u.email)} · ${u.seen?'último acesso '+fmtDT(u.seen):'ainda não entrou'} · gerencia ${S.chars.filter(c=>c.managerEmail===u.email).length}</small></div>${o?`<select class="fi" style="width:auto" onchange="setRole('${esc(u.email)}',this.value)">${o.map(r=>`<option value="${r}" ${u.role===r?'selected':''}>${LBL[r]}</option>`).join('')}</select>`:`<span class="role role-${u.role}">${ROLE[u.role]}</span>`}</div>`;}).join('');
+  const rows=USERS.map(u=>{const o=u.email!==ME.email&&u.role!=='owner'?opts(u):null;return `<div class="trow"><span class="cm-av" style="background:${personColor(u.name)}">${esc(initials(u.name))}</span><div class="fn"><b>${esc(u.name)}${u.email===ME.email?' (você)':''}</b><small>${esc(u.email)} · ${u.seen?'último acesso '+fmtDT(u.seen):'ainda não entrou'} · gerencia ${S.chars.filter(c=>c.managerEmail===u.email).length}</small></div>${o?`<select class="fi" style="width:auto" data-e="${esc(u.email)}" onchange="setRole(this.dataset.e,this.value)">${o.map(r=>`<option value="${r}" ${u.role===r?'selected':''}>${LBL[r]}</option>`).join('')}</select>`:`<span class="role role-${u.role}">${ROLE[u.role]}</span>`}</div>`;}).join('');
   const m=openModal(`<div class="modal lg"><div class="mhead"><h2>👥 Players & moderadores</h2><button class="icl" onclick="closeModal()">✕</button></div>
     ${isMod()?`<div class="fg"><label>Convidar player <span class="hint">· use o e-mail da conta Google dele</span></label><div class="row" style="flex-wrap:nowrap"><input class="fi" id="inv-email" type="email" placeholder="amigo@gmail.com"><button class="btn solid" id="inv-ok">✉ Convidar</button></div></div>`:''}
     <p class="hint" style="margin-bottom:12px">Só quem está nesta lista consegue entrar no Mural.${owner?' Como dono, você promove moderadores, bloqueia e remove acessos.':isMod()?' Moderadores convidam, bloqueiam e removem players.':''}</p>
@@ -1890,7 +1893,7 @@ async function trashModal(){
   const K={char:'Personagem',rpg:'RPG',org:'Organização'};
   const m=openModal(`<div class="modal lg"><div class="mhead"><h2>🗑 Lixeira</h2><button class="icl" onclick="closeModal()">✕</button></div>
     <p class="hint" style="margin-bottom:12px">Itens apagados ficam aqui por 30 dias e depois somem de vez (com imagens e arquivos).</p>
-    <div class="flist">${items.map(t=>`<div class="trow"><img src="${t.avatar||placeholder(t.name,t.kind==='char'?'':t.kind)}" alt=""><div class="fn"><b>${esc(t.name||'(sem nome)')}</b><small>${K[t.kind]} · apagado por ${esc(uname(t.deletedBy))} em ${fmtDT(t.deletedAt)} · some em ${Math.max(0,Math.ceil((t.purgeAt-Date.now())/86400000))} dia(s)</small></div><button class="btn sm solid" data-r="${t.kind}/${t.id}">↺ Restaurar</button><button class="btn sm red" data-p="${t.kind}/${t.id}" data-n="${esc(t.name)}">Apagar de vez</button></div>`).join('')||'<p class="hint">A lixeira está vazia.</p>'}</div></div>`);
+    <div class="flist">${items.map(t=>`<div class="trow"><img src="${safeUrl(t.avatar)||placeholder(t.name,t.kind==='char'?'':t.kind)}" alt=""><div class="fn"><b>${esc(t.name||'(sem nome)')}</b><small>${K[t.kind]} · apagado por ${esc(uname(t.deletedBy))} em ${fmtDT(t.deletedAt)} · some em ${Math.max(0,Math.ceil((t.purgeAt-Date.now())/86400000))} dia(s)</small></div><button class="btn sm solid" data-r="${t.kind}/${t.id}">↺ Restaurar</button><button class="btn sm red" data-p="${t.kind}/${t.id}" data-n="${esc(t.name)}">Apagar de vez</button></div>`).join('')||'<p class="hint">A lixeira está vazia.</p>'}</div></div>`);
   $$('[data-r]',m).forEach(b=>b.onclick=async()=>{try{await api('POST','/trash/'+b.dataset.r+'/restore');plim();saveToast('Restaurado');closeModal(m);await reloadState();trashModal();}catch(e){handleErr(e);}});
   $$('[data-p]',m).forEach(b=>b.onclick=async()=>{if(!(await confirmBox('Apagar de vez?',`<b>${esc(b.dataset.n)}</b> e todos os arquivos dele serão apagados permanentemente.`,'Apagar de vez')))return;try{await api('DELETE','/trash/'+b.dataset.p);saveToast('Apagado permanentemente');closeModal(m);trashModal();}catch(e){handleErr(e);}});
 }
