@@ -732,7 +732,11 @@ function plim(){
 }
 
 // ── API (Supabase) ──
-const CFG=window.MURAL_CONFIG||{};
+const CFG=Object.assign({},window.MURAL_CONFIG||{});
+// aceita a URL colada com sobras (/rest/v1, /auth/v1, barra final, espaços) e chave com espaços/aspas
+CFG.SUPABASE_URL=String(CFG.SUPABASE_URL||'').trim().replace(/^['"]|['"]$/g,'').replace(/\/(rest|auth|storage)\/v1.*$/i,'').replace(/\/+$/,'');
+if(CFG.SUPABASE_URL&&!/^https?:\/\//i.test(CFG.SUPABASE_URL))CFG.SUPABASE_URL='https://'+CFG.SUPABASE_URL;
+CFG.SUPABASE_ANON_KEY=String(CFG.SUPABASE_ANON_KEY||'').trim().replace(/^['"]|['"]$/g,'').replace(/\s+/g,'');
 let SB=null;
 const BUCKET='mural';
 function mapErr(err){
